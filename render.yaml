@@ -8,7 +8,7 @@
 #   ENCRYPTION_KEY      — node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 #   CLIENT_ORIGIN       — https://<your-app>.vercel.app   (CORS + cookie origin)
 #   NODE_ENV            — production
-#   MAIL_TRANSPORT      — provider  (then also set RESEND_API_KEY)  |  smtp for a custom SMTP
+#   MAIL_TRANSPORT      — console for log-only email  |  provider + RESEND_API_KEY for real email
 # Optional: CLINIC_NAME, CLINIC_TZ, CLINIC_ADDRESS, CLINIC_PHONE, MIN_LEAD_MINUTES, REMINDER_HOURS_BEFORE
 services:
   - type: web
@@ -35,8 +35,6 @@ services:
       - key: CLIENT_ORIGIN
         sync: false
       - key: MAIL_TRANSPORT
-        value: provider
-      - key: RESEND_API_KEY
-        sync: false
+        value: console
       - key: CLINIC_TZ
         value: Asia/Karachi
