@@ -1,0 +1,231 @@
+// Clinic Appointment System — data model
+// Note: the partial unique index on (doctorId, startsAt) WHERE status <> 'CANCELLED'
+// is created by a raw SQL migration (prisma/migrations/*_partial_slot_index).
+// Do NOT add @@unique([doctorId, startsAt]) here — a full unique index would
+// permanently block rebooking a cancelled slot.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PATIENT
+  DOCTOR
+  ADMIN
+}
+
+enum AppointmentStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum NotificationTemplate {
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  BOOKING_RESCHEDULED
+  REMINDER
+  INVITE
+}
+
+model User {
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  name               String
+  phone              String?
+  passwordHash       String
+  role               Role     @default(PATIENT)
+  isActive           Boolean  @default(true)
+  mustChangePassword Boolean  @default(false)
+  consentGivenAt     DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  doctorProfile       DoctorProfile?
+  patientAppointments Appointment[]           @relation("PatientAppointments")
+  refreshTokens       RefreshToken[]
+  invitesCreated      Invite[]                @relation("InvitedBy")
+  auditLogs           AuditLog[]
+  notesAsPatient      ConsultationNote[]      @relation("NotePatient")
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model Invite {
+  id           String    @id @default(cuid())
+  email        String
+  role         Role
+  tokenHash    String    @unique
+  invitedById  String?
+  invitedBy    User?     @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  createdAt    DateTime  @default(now())
+}
+
+model ClinicSetting {
+  id       String  @id @default("singleton")
+  name     String  @default("Riverside Family Clinic")
+  address  String?
+  phone    String?
+  email    String?
+  timezone String  @default("Asia/Karachi")
+  updatedAt DateTime @updatedAt
+}
+
+model DoctorProfile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialty       String
+  bio             String?
+  consultationFee Int      @default(0)
+  photoUrl        String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  availability   Availability[]
+  timeOff        TimeOff[]
+  appointments   Appointment[]
+  notes          ConsultationNote[]
+
+  @@index([specialty])
+}
+
+model Availability {
+  id                   String  @id @default(cuid())
+  doctorId             String
+  doctor               DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  dayOfWeek            Int // 0 = Sunday .. 6 = Saturday
+  startTime            String // "HH:mm" clinic-local wall clock
+  endTime              String // "HH:mm" clinic-local wall clock
+  slotDurationMinutes  Int     @default(20)
+  bufferMinutes        Int     @default(0)
+  isActive             Boolean @default(true)
+
+  @@index([doctorId, dayOfWeek])
+}
+
+model TimeOff {
+  id        String  @id @default(cuid())
+  doctorId  String
+  doctor    DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  date      DateTime // UTC midnight of the clinic-local date (stored as @db.Date)
+  startTime String? // null = whole day
+  endTime   String?
+  reason    String?
+
+  @@index([doctorId, date])
+}
+
+model Appointment {
+  id                String            @id @default(cuid())
+  patientId         String
+  patient           User              @relation("PatientAppointments", fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId          String
+  doctor            DoctorProfile     @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  startsAt          DateTime // always UTC
+  durationMinutes   Int               @default(20)
+  status            AppointmentStatus @default(PENDING)
+  reasonForVisit    String
+  symptoms          String?
+  canceledAt        DateTime?
+  canceledById      String?
+  cancelReason      String?
+  rescheduledFromId String?           @unique
+  rescheduledFrom   Appointment?      @relation("RescheduleChain", fields: [rescheduledFromId], references: [id], onDelete: SetNull)
+  rescheduledTo     Appointment?      @relation("RescheduleChain")
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  note ConsultationNote?
+
+  // Availability lookups: WHERE doctorId = ? AND startsAt >= ? ORDER BY startsAt
+  @@index([doctorId, startsAt])
+  // Patient history & doctor schedule
+  @@index([patientId, startsAt])
+  // Admin clinic-wide date/status filters
+  @@index([status, startsAt])
+}
+
+model ConsultationNote {
+  id            String      @id @default(cuid())
+  appointmentId String      @unique
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  doctorId      String
+  doctor        DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  patientId     String
+  patient       User        @relation("NotePatient", fields: [patientId], references: [id], onDelete: Cascade)
+  notes         String // AES-256-GCM ciphertext (sensitive at rest)
+  prescriptions String // AES-256-GCM ciphertext (JSON array of {medication, dosage, instructions})
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([patientId])
+  @@index([doctorId])
+}
+
+model AuditLog {
+  id              String   @id @default(cuid())
+  actorUserId     String?
+  actor           User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  action          String // e.g. "note.read", "appointment.cancel", "doctor.invite"
+  entityType      String // e.g. "ConsultationNote", "Appointment"
+  entityId        String?
+  subjectPatientId String?
+  ip              String?
+  metadata        Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([subjectPatientId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([createdAt])
+}
+
+model Notification {
+  id           String              @id @default(cuid())
+  channel      NotificationChannel @default(EMAIL)
+  recipient    String
+  template     NotificationTemplate
+  subject      String
+  payload      Json
+  scheduledFor DateTime
+  status       NotificationStatus  @default(PENDING)
+  attempts     Int                 @default(0)
+  lastError    String?
+  sentAt       DateTime?
+  createdAt    DateTime            @default(now())
+
+  @@index([status, scheduledFor])
+}

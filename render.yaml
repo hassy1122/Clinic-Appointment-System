@@ -1,0 +1,42 @@
+# Render deployment for the Express + Prisma API.
+# Create a Web Service from this repo — Render reads this file automatically.
+#
+# Required environment variables (set them in the Render dashboard):
+#   DATABASE_URL        — your managed Postgres connection string (Render Postgres / Neon / Supabase)
+#   JWT_ACCESS_SECRET   — node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+#   JWT_REFRESH_SECRET  — same, a different value
+#   ENCRYPTION_KEY      — node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+#   CLIENT_ORIGIN       — https://<your-app>.vercel.app   (CORS + cookie origin)
+#   NODE_ENV            — production
+#   MAIL_TRANSPORT      — provider  (then also set RESEND_API_KEY)  |  smtp for a custom SMTP
+# Optional: CLINIC_NAME, CLINIC_TZ, CLINIC_ADDRESS, CLINIC_PHONE, MIN_LEAD_MINUTES, REMINDER_HOURS_BEFORE
+services:
+  - type: web
+    name: clinic-appointment-api
+    runtime: node
+    rootDir: server
+    plan: free
+    healthCheckPath: /api/health
+    buildCommand: npm install && npx prisma generate && npm run build
+    startCommand: npx prisma migrate deploy && npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: false
+      - key: CLIENT_ORIGIN
+        sync: false
+      - key: MAIL_TRANSPORT
+        value: provider
+      - key: RESEND_API_KEY
+        sync: false
+      - key: CLINIC_TZ
+        value: Asia/Karachi
